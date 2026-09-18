@@ -2,7 +2,7 @@
  * =====================================================================================
  *  Project       : ESP32 Robotic Head Firmware (Direct PWM / Classic Bluetooth)
  *  Author        : Rupesh Thakur (https://github.com/Rupesh6786)
- *  Repository    : https://github.com/Rupesh6786/esp_quadruped_robot
+ *  Repository    : https://github.com/Rupesh6786/BLE_Head_Control_V1.0.git
  *  Target MCU    : ESP32 (WROOM-32 / ESP32-DevKit v1)
  *  Language      : C++ / Arduino Framework
  * =====================================================================================
@@ -21,7 +21,6 @@
 
 #include "BluetoothSerial.h"
 #include <ESP32Servo.h>
-#include "animations.h"
 
 BluetoothSerial SerialBT;
 
