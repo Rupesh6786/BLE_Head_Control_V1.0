@@ -1,22 +1,22 @@
 /*
- * =====================================================================================
- *  Project       : ESP32 Robotic Head Firmware (Direct PWM / Classic Bluetooth)
- *  Author        : Rupesh Thakur (https://github.com/Rupesh6786)
- *  Repository    : https://github.com/Rupesh6786/BLE_Head_Control_V1.0.git
- *  Target MCU    : ESP32 (WROOM-32 / ESP32-DevKit v1)
- *  Language      : C++ / Arduino Framework
- * =====================================================================================
- * 
- *  [OVERVIEW]
- *  Firmware for a 3-DOF Robotic Head (Neck, Eyes, Mouth) driven directly via ESP32 PWM 
- *  pins without external hardware servo drivers. Features smooth interpolation curves, 
- *  virtual pin command parser matching app protocols, and low-power optimization.
- * 
- *  [ROBOT TOPOLOGY & PINOUT]
- *   - Neck (V0)  : GPIO 2  (Base Rotation)
- *   - Eyes (V1)  : GPIO 4  (Pan Tracking / Gaze)
- *   - Mouth (V2) : GPIO 5  (Jaw Mechanism)
- * =====================================================================================
+- =====================================================================================
+-  Project       : ESP32 Robotic Head Firmware (Direct PWM / Classic Bluetooth)
+-  Author        : Rupesh Thakur (https://github.com/Rupesh6786)
+-  Repository    : https://github.com/Rupesh6786/BLE_Head_Control_V1.0.git
+-  Target MCU    : ESP32 (WROOM-32 / ESP32-DevKit v1)
+-  Language      : C++ / Arduino Framework
+- =====================================================================================
+- 
+-  [OVERVIEW]
+-  Firmware for a 3-DOF Robotic Head (Neck, Eyes, Mouth) driven directly via ESP32 PWM 
+-  pins without external hardware servo drivers. Features smooth interpolation curves, 
+-  virtual pin command parser matching app protocols, and low-power optimization.
+- 
+-  [ROBOT TOPOLOGY & PINOUT & LIMITS]
+- Neck (V0)  : GPIO 2  (Base Rotation) -> Limits: 40° to 140° (Neutral: 90°)
+- Eyes (V1)  : GPIO 4  (Pan Tracking)  -> Limits: 50° to 115° (Neutral: 90°)
+- Mouth (V2) : GPIO 5  (Jaw Mechanism) -> Limits: 0° to 60°   (Closed: 0°, Open: 60°)
+- =====================================================================================
  */
 
 #include "BluetoothSerial.h"
@@ -24,7 +24,7 @@
 
 BluetoothSerial SerialBT;
 
-// ---------- Servos ----------
+// ---------- Servos & Pin Configuration ----------
 static const int numberOfServos = 3;                 
 static const int servoPins[numberOfServos] = {2, 4, 5};  
 /*
@@ -34,8 +34,27 @@ static const int servoPins[numberOfServos] = {2, 4, 5};
 */
 
 Servo servos[numberOfServos];
-int servoPos[numberOfServos] = { 90, 90, 0 }; // Initial positions
-const int servoPrgPeriod = 20;                // 20 ms interpolation period
+
+// ---------- Servo Min / Max & Neutral Limits ----------
+// Neck Limits
+const int NECK_MIN     = 40;  // Right
+const int NECK_MAX     = 140; // Left
+const int NECK_NEUTRAL = 90;
+
+// Eyes Limits
+const int EYES_MIN     = 50;  // Right
+const int EYES_MAX     = 115; // Left
+const int EYES_NEUTRAL = 90;
+
+// Mouth Limits
+const int MOUTH_CLOSED = 0;
+const int MOUTH_OPEN   = 60;
+
+// Initial positions {Neck, Eyes, Mouth}
+int servoPos[numberOfServos] = { NECK_NEUTRAL, EYES_NEUTRAL, MOUTH_CLOSED }; 
+const int servoPrgPeriod = 20; // 20 ms interpolation period
+
+#include "animations.h" 
 
 // ========== Helper: Run a sequence smoothly with interpolation ==========
 void runHeadPrg(const int sequence[][HEAD_ACE], int steps) {
@@ -52,8 +71,15 @@ void runHeadPrg(const int sequence[][HEAD_ACE], int steps) {
 
     for (int step = 1; step <= segments; step++) {
       for (int s = 0; s < numberOfServos; s++) {
-        long nextAngle = servoPos[s] + ( (long)(target[s] - servoPos[s]) * step ) / segments;
-        int cmd = constrain(nextAngle, 0, 180);
+        // Interpolation calculation with fixed multiplication operator (*)
+        long nextAngle = servoPos[s] + ((long)(target[s] - servoPos[s]) * step) / segments;
+        
+        // Constrain each servo according to its specific safe hardware limits
+        int cmd = nextAngle;
+        if (s == 0) cmd = constrain(nextAngle, NECK_MIN, NECK_MAX);
+        else if (s == 1) cmd = constrain(nextAngle, EYES_MIN, EYES_MAX);
+        else if (s == 2) cmd = constrain(nextAngle, MOUTH_CLOSED, MOUTH_OPEN);
+
         servos[s].write(cmd);
       }
       delay(servoPrgPeriod);
@@ -79,17 +105,31 @@ void parseBluetoothCommand(String data) {
     int val = data.substring(colonIdx + 1).toInt();
 
     int pinNum = -1;
-    if (pinStr.equals("0")) pinNum = 0; // V0 -> Neck
+    if (pinStr.equals("0")) pinNum = 0;      // V0 -> Neck
     else if (pinStr.equals("1")) pinNum = 1; // V1 -> Eyes
     else if (pinStr.equals("2")) pinNum = 2; // V2 -> Mouth
 
     if (pinNum >= 0 && pinNum < numberOfServos) {
-      // If it's the mouth switch (V2), treat value 1/0 as 180/0 degrees (or direct val if toggled)
-      if (pinNum == 2 && (val == 0 || val == 1)) {
-        val = (val == 1) ? 180 : 0; 
+      // Apply specific min/max limit mappings based on the servo pin
+      if (pinNum == 0) {
+        // Neck: map toggle or constrain within 40 to 140
+        if (val == 1) val = NECK_MAX;
+        else if (val == 0) val = NECK_NEUTRAL;
+        servoPos[pinNum] = constrain(val, NECK_MIN, NECK_MAX);
+      } 
+      else if (pinNum == 1) {
+        // Eyes: map toggle or constrain within 50 to 115
+        if (val == 1) val = EYES_MAX;
+        else if (val == 0) val = EYES_NEUTRAL;
+        servoPos[pinNum] = constrain(val, EYES_MIN, EYES_MAX);
+      } 
+      else if (pinNum == 2) {
+        // Mouth: toggle 1/0 maps to Open (60°) / Closed (0°)
+        if (val == 1 || val == 180) val = MOUTH_OPEN;
+        else val = MOUTH_CLOSED;
+        servoPos[pinNum] = constrain(val, MOUTH_CLOSED, MOUTH_OPEN);
       }
-      
-      servoPos[pinNum] = constrain(val, 0, 180);
+
       servos[pinNum].write(servoPos[pinNum]);
       Serial.printf("Head Servo %d set to %d°\n", pinNum, servoPos[pinNum]);
     }
@@ -126,7 +166,7 @@ void setup() {
   SerialBT.begin("ESP32-BT-ROBOTIC-HEAD");
   Serial.println("\nBluetooth device started: ESP32-BT-ROBOTIC-HEAD");
 
-  // Attach servos and move to initial positions
+  // Attach servos and move to initial positions safely
   for (int i = 0; i < numberOfServos; i++) {
     servos[i].attach(servoPins[i]);
     servos[i].write(servoPos[i]);
